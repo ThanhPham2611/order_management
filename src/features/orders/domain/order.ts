@@ -38,6 +38,8 @@ export interface Order {
   deliveryAt: string;
   status: OrderStatus;
   notes: string | null;
+  /** Free sample: counts as an order and in quantities, but its money total is 0. */
+  isGift: boolean;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -58,32 +60,59 @@ export const catalogItemInputSchema = z.object({
 export type CatalogItemInput = z.infer<typeof catalogItemInputSchema>;
 export type CatalogItemUpdate = CatalogItemInput & { active: boolean };
 
-export function orderTotal(order: Pick<Order, "items">): number {
+export function orderTotal(order: Pick<Order, "items" | "isGift">): number {
+  if (order.isGift) return 0;
   return order.items.reduce((sum, item) => sum + Math.round(item.quantity * item.unitPrice), 0);
 }
 
 /** Dashboard counters. Cancelled orders are ignored; "unpaid" = new + delivered. */
 export function summarizeOrders(orders: Order[]) {
-  const summary = { toDeliver: 0, delivered: 0, paid: 0, unpaidAmount: 0, paidAmount: 0 };
+  const summary = { toDeliver: 0, delivered: 0, paid: 0, gifts: 0, unpaidAmount: 0, paidAmount: 0 };
   for (const order of orders) {
     if (order.status === "cancelled") continue;
     summary[order.status === "new" ? "toDeliver" : order.status] += 1;
+    if (order.isGift) summary.gifts += 1;
     summary[order.status === "paid" ? "paidAmount" : "unpaidAmount"] += orderTotal(order);
   }
   return summary;
 }
 
-/** Total quantity per unit; the fixed units always appear (even at 0), legacy/other units only when present. */
-export function summarizeUnits(orders: Order[]): Array<{ unit: string; total: number }> {
-  const totals = new Map<string, number>(ORDER_UNITS.map((unit) => [unit, 0]));
-  for (const { items } of orders) {
-    for (const item of items) {
+export type QuantitySplit = { bought: number; gift: number };
+export type BreakdownStatus = "new" | "delivered" | "paid";
+export const BREAKDOWN_STATUSES: readonly BreakdownStatus[] = ["new", "delivered", "paid"];
+
+export interface UnitBreakdown {
+  unit: string;
+  byStatus: Record<BreakdownStatus, QuantitySplit>;
+  total: QuantitySplit;
+}
+
+/**
+ * Quantity per unit, split by column (new/delivered/paid) and by bought vs gift, plus a grand total.
+ * Cancelled orders are ignored. The fixed units always appear (even at 0); legacy/missing units only when present.
+ */
+export function summarizeQuantities(orders: Order[]): UnitBreakdown[] {
+  const empty = (): QuantitySplit => ({ bought: 0, gift: 0 });
+  const make = (unit: string): UnitBreakdown => ({
+    unit,
+    byStatus: { new: empty(), delivered: empty(), paid: empty() },
+    total: empty(),
+  });
+  const units = new Map<string, UnitBreakdown>(ORDER_UNITS.map((unit) => [unit, make(unit)]));
+
+  for (const order of orders) {
+    if (order.status === "cancelled") continue;
+    const kind = order.isGift ? "gift" : "bought";
+    for (const item of order.items) {
       const unit = item.unit?.trim() || "Khác";
-      totals.set(unit, (totals.get(unit) ?? 0) + item.quantity);
+      const row = units.get(unit) ?? units.set(unit, make(unit)).get(unit)!;
+      row.byStatus[order.status][kind] += item.quantity;
+      row.total[kind] += item.quantity;
     }
   }
-  return [...totals].filter(([unit, total]) => total > 0 || (ORDER_UNITS as readonly string[]).includes(unit))
-    .map(([unit, total]) => ({ unit, total }));
+  return [...units.values()].filter(
+    (row) => (ORDER_UNITS as readonly string[]).includes(row.unit) || row.total.bought + row.total.gift > 0,
+  );
 }
 
 export const orderItemInputSchema = z.object({
@@ -113,6 +142,7 @@ export const orderInputSchema = z.object({
     .max(500, "Địa chỉ tối đa 500 ký tự"),
   deliveryAt: z.string().min(1, "Chọn ngày giờ giao"),
   notes: z.string().trim().max(1_000, "Ghi chú tối đa 1.000 ký tự").optional().or(z.literal("")),
+  isGift: z.boolean().default(false),
   items: z.array(orderItemInputSchema).min(1, "Thêm ít nhất một món").max(50),
 });
 
@@ -180,6 +210,48 @@ export function filterOrders(orders: Order[], query: string): Order[] {
       .join(" ");
     return searchable.includes(normalizedQuery);
   });
+}
+
+/** Stable key to match the same item across orders (legacy lines have no catalog id). */
+export function itemKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+export function orderHasItem(order: Order, key: string): boolean {
+  return order.items.some((item) => itemKey(item.name) === key);
+}
+
+/** The order reduced to its lines for one item, so dashboards can count just that item. */
+export function onlyItem(order: Order, key: string): Order {
+  return { ...order, items: order.items.filter((item) => itemKey(item.name) === key) };
+}
+
+export interface AddressSuggestion {
+  address: string;
+  recipientName: string;
+  recipientPhone: string | null;
+}
+
+/** Previous delivery addresses matching what is being typed (accent-insensitive, every word must match), newest first. */
+export function suggestAddresses(orders: Order[], query: string, limit = 5): AddressSuggestion[] {
+  const typed = normalizeSearchText(query);
+  if (typed.length < 2) return [];
+  const words = typed.split(/\s+/);
+  const seen = new Set<string>();
+  const result: AddressSuggestion[] = [];
+  for (const order of [...orders].sort((a, b) => b.createdAt.localeCompare(a.createdAt))) {
+    const key = normalizeSearchText(order.deliveryAddress);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (key === typed || !words.every((word) => key.includes(word))) continue;
+    result.push({
+      address: order.deliveryAddress,
+      recipientName: order.recipientName,
+      recipientPhone: order.recipientPhone,
+    });
+    if (result.length === limit) break;
+  }
+  return result;
 }
 
 export function sortOrdersByDelivery(orders: Order[]): Order[] {

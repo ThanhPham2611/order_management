@@ -28,6 +28,54 @@ test("creates an order in demo mode and keeps it on the active board", async ({ 
   await expect(page.getByRole("region", { name: "Tổng quan đơn hàng" })).toContainText("hộp");
 });
 
+test("a free-sample order costs 0 but is still counted", async ({ page }) => {
+  await page.goto("/");
+  const dashboard = page.getByRole("region", { name: "Tổng quan đơn hàng" });
+  await expect(dashboard).not.toContainText("đơn tặng");
+
+  await page.getByRole("button", { name: "Tạo đơn" }).click();
+  await page.getByLabel("Người nhận").fill("Ăn thử");
+  await page.getByLabel("Địa chỉ giao").fill("5 Test, Quận 1");
+  const t = new Date(Date.now() + 7 * 3600e3 + 60 * 60e3);
+  await page.getByLabel("Ngày giờ giao").fill(t.toISOString().slice(0, 16));
+  await page.getByLabel("Tên món 1").selectOption("demo-cat-3");
+  await page.getByRole("checkbox", { name: /Hàng tặng/ }).check();
+  await expect(page.getByText(/Tổng tiền đơn/)).not.toContainText("45.000");
+  await page.getByRole("button", { name: "Lưu đơn" }).click();
+
+  await expect(dashboard).toContainText("1 đơn tặng");
+  await expect(dashboard).toContainText("675.000"); // unpaid money unchanged by the gift order
+
+  // hộp: bought 13 (2 new + 3 + 8 delivered), gift 1 -> total 14
+  const hop = page.locator("table.qty-table", { hasText: "Tổng hộp" });
+  await expect(hop.locator("tfoot td")).toHaveText(["13", "1", "14"]);
+});
+
+test("suggests a previous address and fills the recipient", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Tạo đơn" }).click();
+  await page.getByLabel("Địa chỉ giao").fill("minh khai q1");
+  await page.getByLabel("Địa chỉ giao").fill("minh khai");
+  await page.getByRole("button", { name: /28 Nguyễn Thị Minh Khai/ }).click();
+  await expect(page.getByLabel("Địa chỉ giao")).toHaveValue("28 Nguyễn Thị Minh Khai, Quận 1");
+  await expect(page.getByLabel("Người nhận")).toHaveValue("Chị Mai");
+});
+
+test("filters by item and by a picked date", async ({ page }) => {
+  await page.goto("/");
+  const dashboard = page.getByRole("region", { name: "Tổng quan đơn hàng" });
+  await expect(dashboard).toContainText("4 đơn đang hiển thị");
+
+  await page.getByLabel("Lọc theo vật phẩm").selectOption({ label: "Bún bò đặc biệt" });
+  await expect(dashboard).toContainText("1 đơn đang hiển thị");
+  await expect(dashboard).toContainText("chỉ tính món này");
+  await page.getByLabel("Lọc theo vật phẩm").selectOption({ label: "Tất cả vật phẩm" });
+
+  await page.getByLabel("Lọc theo ngày giao").selectOption("date");
+  await page.getByLabel("Ngày giao cụ thể").fill("2020-01-01");
+  await expect(dashboard).toContainText("0 đơn đang hiển thị");
+});
+
 test("adds a catalog item inline from the order form and manages it in the drawer", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Tạo đơn" }).click();

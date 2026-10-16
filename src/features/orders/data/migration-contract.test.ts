@@ -53,3 +53,14 @@ describe("three-column status migration contract", () => {
     expect(sql).toMatch(/grant execute on function public\.set_order_status\(uuid, integer, public\.order_status\) to anon/i);
   });
 });
+
+describe("gift order migration contract", () => {
+  const sql = readFileSync(resolve("supabase/migrations/202610160004_gift_orders.sql"), "utf8");
+
+  it("adds is_gift and passes it through the create/update RPCs and order json", () => {
+    expect(sql).toMatch(/add column if not exists is_gift boolean not null default false/i);
+    expect(sql).toMatch(/'is_gift', o\.is_gift/);
+    expect(sql).toMatch(/create or replace function public\.create_order/i);
+    expect(sql).toMatch(/create or replace function public\.update_order/i);
+  });
+});

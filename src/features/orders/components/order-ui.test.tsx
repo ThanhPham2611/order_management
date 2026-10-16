@@ -15,6 +15,7 @@ const order: Order = {
   deliveryAt: "2026-10-16T05:30:00.000Z",
   status: "new",
   notes: "Gọi trước khi giao",
+  isGift: false,
   version: 1,
   createdAt: "2026-10-16T02:00:00.000Z",
   updatedAt: "2026-10-16T02:00:00.000Z",
@@ -95,6 +96,58 @@ describe("OrderFormDialog", () => {
 
     expect(screen.getByText(/Thành tiền/)).toHaveTextContent("165.000");
     expect(screen.getByText(/Tổng tiền đơn/)).toHaveTextContent("165.000");
+  });
+
+  it("marks an order as a free gift: total 0 and isGift submitted", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<OrderFormDialog open mode="create" onClose={vi.fn()} onSubmit={onSubmit} isOnline catalog={catalog} />);
+
+    await user.type(screen.getByLabelText("Người nhận"), "Khách thử");
+    await user.type(screen.getByLabelText("Địa chỉ giao"), "1 Test");
+    await user.type(screen.getByLabelText("Ngày giờ giao"), "2026-10-16T12:30");
+    await user.selectOptions(screen.getByLabelText("Tên món 1"), "cat-1");
+    expect(screen.getByText(/Tổng tiền đơn/)).toHaveTextContent("55.000");
+
+    await user.click(screen.getByRole("checkbox", { name: /Hàng tặng/ }));
+    expect(screen.getByText(/Tổng tiền đơn/)).toHaveTextContent("0");
+    expect(screen.getByText(/Tổng tiền đơn/)).not.toHaveTextContent("55.000");
+
+    await user.click(screen.getByRole("button", { name: "Lưu đơn" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ isGift: true }));
+  });
+
+  it("suggests addresses from previous orders and fills an empty recipient", async () => {
+    const user = userEvent.setup();
+    render(
+      <OrderFormDialog open mode="create" onClose={vi.fn()} onSubmit={vi.fn()} isOnline orders={[order]} />,
+    );
+
+    expect(screen.queryByRole("list", { name: /Gợi ý địa chỉ/ })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Địa chỉ giao"), "nguyen hue");
+
+    const hints = screen.getByRole("list", { name: /Gợi ý địa chỉ/ });
+    expect(hints).toHaveTextContent("12 Nguyễn Huệ, Quận 1");
+    expect(hints).toHaveTextContent("Nguyễn Minh An · 0901234567");
+
+    await user.click(screen.getByRole("button", { name: /12 Nguyễn Huệ/ }));
+    expect(screen.getByLabelText("Địa chỉ giao")).toHaveValue("12 Nguyễn Huệ, Quận 1");
+    expect(screen.getByLabelText("Người nhận")).toHaveValue("Nguyễn Minh An");
+    expect(screen.getByLabelText("Số điện thoại")).toHaveValue("0901234567");
+    expect(screen.queryByRole("list", { name: /Gợi ý địa chỉ/ })).not.toBeInTheDocument();
+  });
+
+  it("does not overwrite a recipient that was already typed", async () => {
+    const user = userEvent.setup();
+    render(
+      <OrderFormDialog open mode="create" onClose={vi.fn()} onSubmit={vi.fn()} isOnline orders={[order]} />,
+    );
+
+    await user.type(screen.getByLabelText("Người nhận"), "Khách khác");
+    await user.type(screen.getByLabelText("Địa chỉ giao"), "nguyen hue");
+    await user.click(screen.getByRole("button", { name: /12 Nguyễn Huệ/ }));
+
+    expect(screen.getByLabelText("Người nhận")).toHaveValue("Khách khác");
   });
 
   it("creates a catalog item inline and selects it for the line", async () => {

@@ -37,6 +37,7 @@ export interface OrderRow {
   delivery_at: string;
   status: OrderStatus;
   notes: string | null;
+  is_gift?: boolean;
   version: number;
   created_at: string;
   updated_at: string;
@@ -50,6 +51,7 @@ interface OrderRpcPayload {
   delivery_address: string;
   delivery_at: string;
   notes: string | null;
+  is_gift: boolean;
   items: Array<{
     name: string;
     quantity: number;
@@ -84,6 +86,7 @@ export function mapOrderRow(row: OrderRow): Order {
     deliveryAt: row.delivery_at,
     status: row.status,
     notes: row.notes,
+    isGift: Boolean(row.is_gift),
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -113,6 +116,7 @@ export function serializeOrderInput(input: OrderInput): OrderRpcPayload {
     delivery_address: input.deliveryAddress.trim(),
     delivery_at: deliveryInstant.toISOString(),
     notes: input.notes?.trim() || null,
+    is_gift: Boolean(input.isGift),
     items: input.items.map((item) => ({
       name: item.name.trim(),
       quantity: Number(item.quantity),
@@ -162,7 +166,7 @@ export async function fetchOrders(): Promise<Order[]> {
   const { data, error } = await client
     .from("orders")
     .select(
-      "id, order_no, recipient_name, recipient_phone, delivery_address, delivery_at, status, notes, version, created_at, updated_at, order_items(id, name, quantity, unit, unit_price, catalog_item_id, sort_order)",
+      "id, order_no, recipient_name, recipient_phone, delivery_address, delivery_at, status, notes, is_gift, version, created_at, updated_at, order_items(id, name, quantity, unit, unit_price, catalog_item_id, sort_order)",
     )
     .order("delivery_at", { ascending: true });
   if (error) throw toOrderRepositoryError(error);

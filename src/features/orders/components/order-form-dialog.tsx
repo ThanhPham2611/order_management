@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Trash2, X } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useFieldArray, useForm, useWatch, type Resolver } from "react-hook-form";
 
 import { formatVnd } from "@/lib/format";
@@ -10,6 +10,7 @@ import {
   orderInputSchema,
   type CatalogItem,
   type CatalogItemInput,
+  suggestAddresses,
   type Order,
   type OrderInput,
 } from "../domain/order";
@@ -40,6 +41,7 @@ function getDefaults(order?: Order | null): OrderInput {
     deliveryAddress: order?.deliveryAddress ?? "",
     deliveryAt: order ? toVietnamLocalInput(order.deliveryAt) : "",
     notes: order?.notes ?? "",
+    isGift: order?.isGift ?? false,
     items: order?.items.length
       ? order.items.map((item) => ({
           name: item.name,
@@ -58,6 +60,8 @@ interface OrderFormDialogProps {
   order?: Order | null;
   isOnline: boolean;
   catalog?: CatalogItem[];
+  /** Previous orders, used to suggest delivery addresses. */
+  orders?: Order[];
   onCreateCatalogItem?: (input: CatalogItemInput) => Promise<CatalogItem>;
   onClose: () => void;
   onSubmit: (input: OrderInput) => Promise<void>;
@@ -69,6 +73,7 @@ export function OrderFormDialog({
   order,
   isOnline,
   catalog = [],
+  orders = [],
   onCreateCatalogItem,
   onClose,
   onSubmit,
@@ -79,6 +84,7 @@ export function OrderFormDialog({
     register,
     control,
     setValue,
+    getValues,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<OrderInput>({
@@ -87,13 +93,32 @@ export function OrderFormDialog({
   });
   const { fields, append, remove } = useFieldArray({ control, name: "items" });
   const lines = useWatch({ control, name: "items" });
+  const isGift = useWatch({ control, name: "isGift" });
+  const addressText = useWatch({ control, name: "deliveryAddress" });
+  const [showAddressHints, setShowAddressHints] = useState(false);
+  const addressList = useRef<HTMLUListElement>(null);
+  const addressField = register("deliveryAddress");
+  const addressHints = showAddressHints ? suggestAddresses(orders, addressText ?? "") : [];
+
+  const pickAddress = (hint: (typeof addressHints)[number]) => {
+    const opts = { shouldDirty: true, shouldValidate: true };
+    setValue("deliveryAddress", hint.address, opts);
+    // Fill the recipient only when still empty, so nothing the user typed is overwritten.
+    if (!getValues("recipientName")) setValue("recipientName", hint.recipientName, opts);
+    if (!getValues("recipientPhone") && hint.recipientPhone) setValue("recipientPhone", hint.recipientPhone, opts);
+    setShowAddressHints(false);
+  };
+  const focusHint = (from: number, step: number) => {
+    const buttons = addressList.current?.querySelectorAll("button");
+    buttons?.[Math.max(0, Math.min(buttons.length - 1, from + step))]?.focus();
+  };
   const activeCatalog = catalog.filter((item) => item.active);
   const lineAmount = (index: number) => {
     const line = lines?.[index];
     const amount = Math.round(Number(line?.quantity) * Number(line?.unitPrice));
     return Number.isFinite(amount) ? amount : 0;
   };
-  const orderAmount = fields.reduce((sum, _, index) => sum + lineAmount(index), 0);
+  const orderAmount = isGift ? 0 : fields.reduce((sum, _, index) => sum + lineAmount(index), 0);
 
   const applyCatalogItem = (index: number, item: CatalogItem | null) => {
     const opts = { shouldDirty: true, shouldValidate: true };
@@ -160,21 +185,70 @@ export function OrderFormDialog({
               </label>
             </div>
 
-            <label className="field">
-              <span>Địa chỉ giao</span>
-              <textarea
-                aria-label="Địa chỉ giao"
-                rows={2}
-                autoComplete="street-address"
-                {...register("deliveryAddress")}
-              />
-              {errors.deliveryAddress ? <small role="alert">{errors.deliveryAddress.message}</small> : null}
-            </label>
+            <div
+              className="address-field"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setShowAddressHints(false);
+              }}
+            >
+              <label className="field">
+                <span>Địa chỉ giao</span>
+                <textarea
+                  aria-label="Địa chỉ giao"
+                  rows={2}
+                  autoComplete="off"
+                  {...addressField}
+                  onChange={(event) => {
+                    void addressField.onChange(event);
+                    setShowAddressHints(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowDown" && addressHints.length) {
+                      event.preventDefault();
+                      focusHint(-1, 1);
+                    } else if (event.key === "Escape" && showAddressHints) {
+                      event.stopPropagation();
+                      setShowAddressHints(false);
+                    }
+                  }}
+                />
+                {errors.deliveryAddress ? <small role="alert">{errors.deliveryAddress.message}</small> : null}
+              </label>
+              {addressHints.length ? (
+                <ul className="address-hints" ref={addressList} aria-label="Gợi ý địa chỉ từ các đơn trước">
+                  {addressHints.map((hint, index) => (
+                    <li key={hint.address}>
+                      <button
+                        type="button"
+                        onClick={() => pickAddress(hint)}
+                        onKeyDown={(event) => {
+                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                            event.preventDefault();
+                            focusHint(index, event.key === "ArrowDown" ? 1 : -1);
+                          }
+                        }}
+                      >
+                        <span>{hint.address}</span>
+                        <small>{hint.recipientName}{hint.recipientPhone ? ` · ${hint.recipientPhone}` : ""}</small>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
 
             <label className="field field--compact">
               <span>Ngày giờ giao</span>
               <input aria-label="Ngày giờ giao" type="datetime-local" {...register("deliveryAt")} />
               {errors.deliveryAt ? <small role="alert">{errors.deliveryAt.message}</small> : null}
+            </label>
+
+            <label className="gift-toggle">
+              <input type="checkbox" {...register("isGift")} />
+              <span>
+                <strong>Hàng tặng / ăn thử</strong>
+                <small>Đơn 0 ₫ — vẫn tính vào số đơn và số lượng món.</small>
+              </span>
             </label>
 
             <fieldset className="items-fieldset">
@@ -238,7 +312,11 @@ export function OrderFormDialog({
                       ) : null}
                       <div className="item-meta">
                         <span className="item-amount">
-                          {lineAmount(index) > 0 ? `Thành tiền ${formatVnd(lineAmount(index))}` : "\u00a0"}
+                          {isGift
+                            ? "Hàng tặng"
+                            : lineAmount(index) > 0
+                              ? `Thành tiền ${formatVnd(lineAmount(index))}`
+                              : "\u00a0"}
                         </span>
                         {onCreateCatalogItem && creatingFor !== index ? (
                           <button
