@@ -13,7 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, ChefHat, Package, Plus, Search, WifiOff } from "lucide-react";
+import { CalendarDays, ChefHat, Package, Plus, Search, Utensils, WifiOff } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { cn } from "@/lib/cn";
@@ -21,6 +21,9 @@ import { OrderConflictError } from "../data/order-repository";
 import type { OrderRepository } from "../data/repository-contract";
 import {
   filterOrders,
+  itemKey,
+  onlyItem,
+  orderHasItem,
   shouldShowInDefaultWindow,
   sortOrdersByDelivery,
   type CatalogItem,
@@ -137,7 +140,9 @@ export function OrderBoard({ repository, isDemo = false, initialNow }: OrderBoar
   const [now, setNow] = useState(initialNow ?? new Date());
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
-  const [dateFilter, setDateFilter] = useState<"default" | "today" | "tomorrow" | "all">("default");
+  const [dateFilter, setDateFilter] = useState<"default" | "today" | "tomorrow" | "date" | "all">("all");
+  const [pickedDate, setPickedDate] = useState(() => localDateKey(initialNow ?? new Date()));
+  const [itemFilter, setItemFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"board" | OrderStatus>("board");
   const [mobileStatus, setMobileStatus] = useState<OrderStatus>("new");
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
@@ -181,13 +186,31 @@ export function OrderBoard({ repository, isDemo = false, initialNow }: OrderBoar
     const source = filterOrders(ordersQuery.data ?? [], deferredQuery).filter((order) => {
       if (statusFilter !== "board" && order.status !== statusFilter) return false;
       if (statusFilter === "board" && order.status === "cancelled") return false;
+      if (itemFilter && !orderHasItem(order, itemFilter)) return false;
       if (dateFilter === "all") return true;
+      if (dateFilter === "date") return !pickedDate || localDateKey(new Date(order.deliveryAt)) === pickedDate;
       if (dateFilter === "today") return localDateKey(new Date(order.deliveryAt)) === localDateKey(now);
       if (dateFilter === "tomorrow") return isTomorrow(order.deliveryAt, now);
       return shouldShowInDefaultWindow(order, now);
     });
     return sortOrdersByDelivery(source);
-  }, [dateFilter, deferredQuery, now, ordersQuery.data, statusFilter]);
+  }, [dateFilter, deferredQuery, itemFilter, now, ordersQuery.data, pickedDate, statusFilter]);
+
+  // Item names to filter by: the catalog plus anything already on an order (legacy free-text lines).
+  const itemOptions = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const item of catalogQuery.data ?? []) names.set(itemKey(item.name), item.name);
+    for (const order of ordersQuery.data ?? []) {
+      for (const item of order.items) if (!names.has(itemKey(item.name))) names.set(itemKey(item.name), item.name);
+    }
+    return [...names].sort((left, right) => left[1].localeCompare(right[1], "vi"));
+  }, [catalogQuery.data, ordersQuery.data]);
+
+  // With an item filter the dashboard counts only that item's lines, not the whole orders.
+  const dashboardOrders = useMemo(
+    () => (itemFilter ? visibleOrders.map((order) => onlyItem(order, itemFilter)) : visibleOrders),
+    [itemFilter, visibleOrders],
+  );
 
   const grouped = useMemo(
     () =>
@@ -317,14 +340,33 @@ export function OrderBoard({ repository, isDemo = false, initialNow }: OrderBoar
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
+        <div className="filter-date-group">
+          <label className="filter-select">
+            <CalendarDays aria-hidden="true" size={18} />
+            <span className="sr-only">Lọc theo ngày giao</span>
+            <select value={dateFilter} onChange={(event) => setDateFilter(event.target.value as typeof dateFilter)}>
+              <option value="all">Tất cả ngày</option>
+              <option value="today">Hôm nay</option>
+              <option value="tomorrow">Ngày mai</option>
+              <option value="date">Chọn ngày…</option>
+              <option value="default">Hôm nay + quá hạn</option>
+            </select>
+          </label>
+          {dateFilter === "date" ? (
+            <label className="filter-select">
+              <span className="sr-only">Ngày giao cụ thể</span>
+              <input type="date" value={pickedDate} onChange={(event) => setPickedDate(event.target.value)} />
+            </label>
+          ) : null}
+        </div>
         <label className="filter-select">
-          <CalendarDays aria-hidden="true" size={18} />
-          <span className="sr-only">Lọc theo ngày giao</span>
-          <select value={dateFilter} onChange={(event) => setDateFilter(event.target.value as typeof dateFilter)}>
-            <option value="default">Hôm nay + quá hạn</option>
-            <option value="today">Chỉ hôm nay</option>
-            <option value="tomorrow">Ngày mai</option>
-            <option value="all">Tất cả ngày</option>
+          <Utensils aria-hidden="true" size={18} />
+          <span className="sr-only">Lọc theo vật phẩm</span>
+          <select value={itemFilter} onChange={(event) => setItemFilter(event.target.value)}>
+            <option value="">Tất cả vật phẩm</option>
+            {itemOptions.map(([key, name]) => (
+              <option key={key} value={key}>{name}</option>
+            ))}
           </select>
         </label>
         <label className="filter-select">
@@ -338,7 +380,7 @@ export function OrderBoard({ repository, isDemo = false, initialNow }: OrderBoar
         </label>
       </section>
 
-      {ordersQuery.data && statusFilter !== "cancelled" ? <BoardDashboard orders={visibleOrders} /> : null}
+      {ordersQuery.data && statusFilter !== "cancelled" ? <BoardDashboard orders={dashboardOrders} itemLabel={itemOptions.find(([key]) => key === itemFilter)?.[1]} /> : null}
 
       {notice ? <div className="toast" role="status" aria-live="polite">{notice}</div> : null}
 
@@ -404,6 +446,7 @@ export function OrderBoard({ repository, isDemo = false, initialNow }: OrderBoar
           order={editingOrder}
           isOnline={isOnline}
           catalog={catalogQuery.data ?? []}
+          orders={ordersQuery.data ?? []}
           onCreateCatalogItem={createCatalogItem}
           onClose={() => setFormOpen(false)}
           onSubmit={saveOrder}

@@ -18,6 +18,7 @@ describe("order repository mapping", () => {
       delivery_at: "2026-10-16T05:00:00.000Z",
       status: "delivered",
       notes: null,
+      is_gift: true,
       version: 3,
       created_at: "2026-10-16T01:00:00.000Z",
       updated_at: "2026-10-16T02:00:00.000Z",
@@ -28,6 +29,7 @@ describe("order repository mapping", () => {
     });
 
     expect(order.orderNo).toBe(42);
+    expect(order.isGift).toBe(true);
     expect(order.items.map((item) => item.name)).toEqual(["Cơm", "Canh"]);
     expect(order.items[0].quantity).toBe(2);
     expect(order.items[0]).toMatchObject({ unitPrice: 30000, catalogItemId: "cat-1" });
@@ -41,11 +43,13 @@ describe("order repository mapping", () => {
       deliveryAddress: "Quận 3",
       deliveryAt: "2026-10-16T12:30",
       notes: "",
+      isGift: true,
       items: [{ name: "Cơm", quantity: 2, unit: "phần", unitPrice: 30000, catalogItemId: "cat-1" }],
     });
 
     expect(payload.delivery_at).toBe("2026-10-16T05:30:00.000Z");
     expect(payload.recipient_phone).toBeNull();
+    expect(payload.is_gift).toBe(true);
     expect(payload.items[0]).toMatchObject({ unit_price: 30000, catalog_item_id: "cat-1" });
   });
 

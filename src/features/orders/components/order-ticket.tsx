@@ -106,7 +106,11 @@ export function OrderTicket({
         ))}
       </ul>
 
-      {orderTotal(order) > 0 ? (
+      {order.isGift ? (
+        <p className="ticket-total ticket-total--gift">
+          <span className="gift-badge">Hàng tặng</span> <strong>{formatVnd(0)}</strong>
+        </p>
+      ) : orderTotal(order) > 0 ? (
         <p className="ticket-total">
           Tổng tiền <strong>{formatVnd(orderTotal(order))}</strong>
         </p>
